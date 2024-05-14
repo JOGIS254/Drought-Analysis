@@ -1,0 +1,1 @@
+The research utilizes CHIRPS Data to be able to show the distribution of rain as well as the trend. The data is chosen due to its reliability, as it has both ground-based and satellite data integrated.
