@@ -1,0 +1,94 @@
+/////////////////////////////////////
+////Soil Moisture for 2021 to 2023//
+///////////////////////////////////
+
+//Import landsat collection data
+
+var landsat = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+.filterBounds(roi)
+.filterDate('2021','2023')
+.filter(ee.Filter.lt('CLOUD_COVER',5))
+// .filter(ee.Filter.eq('WRS_PATH', 166))
+// .filter(ee.Filter.eq('WRS_ROW', 58));
+
+//Start calculations for LST, NDVI e.t.c
+var parameters = landsat.map(function(img){
+  var ms = img.select('SR_B.*').multiply(0.0000275).add(-0.2);
+  var ndvi = ms.normalizedDifference(['SR_B5','SR_B4']).rename('ndvi');
+  var lst = img.select('ST_B10').multiply(0.00341802).add(149).rename('lst');
+  return ee.Image.cat(ndvi, lst)
+  .copyProperties(img, img.propertyNames())
+  });
+//calculating LST full cover
+var lst_full_cover = parameters.map(function(img){
+  var ndvi_full = img.select('ndvi').gt(0.3);
+  var lst_full = img.select('lst').updateMask(ndvi_full)
+  return lst_full
+  .copyProperties(img, img.propertyNames())
+  })
+//calculating LST Bareland 
+var lst_bareland = parameters.map(function(img){
+  var ndvi_bareland = img.select('ndvi').gte(0).and(img.select('ndvi').lt(0.2));
+  var lst_bareland = img.select('lst').updateMask(ndvi_bareland);
+  return lst_bareland
+  .copyProperties(img, img.propertyNames())
+  });
+  
+
+//calculating LST for Wet Vegetation (vw) for the minmum value in TOTRAM Model
+var vw = ee.Number(lst_full_cover.min().reduceRegion({
+  reducer: ee.Reducer.min(), geometry: roi, scale: 100
+  }).values().get(0))
+  
+//calculating LST for dry Vegetation (vd) for the maximum value in TOTRAM Model
+var vd = ee.Number(lst_full_cover.max().reduceRegion({
+  reducer: ee.Reducer.max(), geometry: roi, scale: 100
+  }).values().get(0))
+  
+//calculating the wet land LST (iw)in TOTRAM Model
+var iw = ee.Number(lst_bareland.min().reduceRegion({
+  reducer: ee.Reducer.min(), geometry: roi, scale: 100
+  }).values().get(0))
+  
+//calculating the dry land LST (id)in TOTRAM Model
+var id = ee.Number(lst_bareland.max().reduceRegion({
+  reducer: ee.Reducer.max(), geometry: roi, scale: 100
+  }).values().get(0));
+  
+//subtraction between dry land (id)  and dry vegetation (vd)
+var sd = id.subtract(vd);
+
+//subtraction between wet land (iw)  and dry vegetation (vw)
+var sw = iw.subtract(vw);
+
+//Making of soil moisture modelling 
+var sm = parameters.map(function(img){
+  var eq = img.expression('(id + sd * ndvi - lst)/(id - iw + (sd - sw) * ndvi)',{
+    'id': id, 'sd': sd, 'ndvi': img.select('ndvi'), 'lst': img.select('lst'), 'iw': iw, 'sw': sw
+    }).rename('soil_moisture');
+  return eq
+  .copyProperties(img, img.propertyNames())
+  });
+  
+// print(
+//   ui.Chart.image.series(sm, roi, ee.Reducer.mean(), 100, 'system:time_start')
+//   )
+  
+// Create a chart of monthly rainfall for a location
+var chart = ui.Chart.image.series({
+  imageCollection: sm,
+  region: roi,
+  reducer: ee.Reducer.max(),
+  scale: 100
+}).setOptions({
+      lineWidth: 1,
+      pointSize: 3,
+      title: 'Soil Moisture at Wajir',
+      vAxis: {title: 'Soil Moisture (mm)'},
+      hAxis: {title: 'Month', gridlines: {count: 24}}
+})
+print(chart)
+
+//Finally add Soil Moisture to the map canvas 
+var clipped_sm = sm.mean().clip(roi);
+Map.addLayer(clipped_sm, {min: 0, max: 1, palette: ['violet', 'green', 'yellow', 'red']}, 'Wajir Mean Soil Moisture 2018 to 2020');
